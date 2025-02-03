@@ -216,16 +216,35 @@ shared AnalyticDB.MySQL.Contents = (server as text, optional options as record) 
         // The sample implementation provided here will simply output the original table
         // to the user trace log, without any modification.
         SQLGetTypeInfo = (types) =>
-            if (EnableTraceOutput <> true) then
-                types
-            else
-                let
-                    // Outputting the entire table might be too large, and result in the value being truncated.
-                    // We can output a row at a time instead with Table.TransformRows()
-                    rows = Table.TransformRows(types, each Diagnostics.LogValue("SQLGetTypeInfo " & _[TYPE_NAME], _)),
-                    toTable = Table.FromRecords(rows)
-                in
-                    Value.ReplaceType(toTable, Value.Type(types)),
+            let
+                typesFiltered = Table.SelectRows(types, each not Text.Contains(_[TYPE_NAME], "BIGINT")),
+                FixColumns = (row) as record =>
+                    if row[TYPE_NAME] = "varchar" then
+                        Record.TransformFields(row, {
+                            { "DATA_TYPE", (val) => -9 },
+                            { "COLUMN_SIZE", (val) => 65532 }
+                            })
+                    else if row[TYPE_NAME] = "float" then
+                        Record.TransformFields(row, {
+                            { "SEARCHABLE", (val) => 3 }
+                            })
+                    else
+                        row,
+                TransformedRows = Table.TransformRows(typesFiltered, each FixColumns(_)), // metadata loss happens here
+                EmptyTableWithColumnTypes = Table.FirstN(typesFiltered, 0), // get an empty table with the original column data types
+                typesFixed = Table.InsertRows(EmptyTableWithColumnTypes, 0, TransformedRows) // insert the transformed data into the empty table with correct metadata
+            in
+                if (EnableTraceOutput <> true) then
+                    typesFixed
+                else
+                    let
+                        // Outputting the entire table might be too large, and result in the value being truncated.
+                        // We can output a row at a time instead with Table.TransformRows()
+                        rows = Table.TransformRows(typesFixed, each Diagnostics.LogValue("SQLGetTypeInfo " & _[TYPE_NAME], _)),
+                        toTable = Table.FromRecords(rows)
+                    in
+                        Value.ReplaceType(toTable, Value.Type(typesFixed))
+        ,
         // SQLColumns is a function handler that receives the results of an ODBC call
         // to SQLColumns(). The source parameter contains a table with the data type
         // information. This override is typically used to fix up data type mismatches
@@ -253,7 +272,8 @@ shared AnalyticDB.MySQL.Contents = (server as text, optional options as record) 
                 in
                     Value.ReplaceType(toTable, Value.Type(source))
             else
-                source,
+                source
+        ,
         // Remove null fields from the ConnectionString
         ConnectionStringNoNulls = Record.SelectFields(
             ConnectionString, Table.SelectRows(Record.ToTable(ConnectionString), each [Value] <> null)[Name]
