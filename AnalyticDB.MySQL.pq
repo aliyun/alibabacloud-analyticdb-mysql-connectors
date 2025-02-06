@@ -114,15 +114,52 @@ Config_UseCastInsteadOfConvert = null;
 //
 Config_EnableDirectQuery = true;
 
+DefaultPort = 3306;
+
 
 [DataSource.Kind="AnalyticDB.MySQL", Publish="AnalyticDB.MySQL.Publish"]
-shared AnalyticDB.MySQL.Contents = (server as text, optional options as record) =>
+shared AnalyticDB.MySQL.Contents = Value.ReplaceType(AnalyticDBDatabaseImpl, AnalyticDBDatabaseType);
+
+AnalyticDBDatabaseType = type function (
+    server as (type text meta [
+        Documentation.FieldCaption = Extension.LoadString("GetData_Server_FieldCaption"),
+        Documentation.FieldDescription = Extension.LoadString("GetData_Server_FieldDescription"),
+        Documentation.SampleValues = { Extension.LoadString("GetData_Server_FieldSample") }
+    ]),
+    optional database as (type text meta [
+        Documentation.FieldCaption = Extension.LoadString("GetData_Database_FieldCaption"),
+        Documentation.FieldDescription = Extension.LoadString("GetData_Database_FieldDescription"),
+        Documentation.SampleValues = { Extension.LoadString("GetData_Database_FieldSample") }
+    ]),
+    optional options as (type [
+        optional connectionProperties = (type text meta [
+            Documentation.FieldCaption = Extension.LoadString("Options_ConnectionProperties_FieldCaption"),
+            Documentation.FieldDescription = Extension.LoadString("Options_ConnectionProperties_FieldCaption"),
+            Documentation.SampleValues = { Extension.LoadString("Options_ConnectionProperties_FieldSample") }
+        ])
+      ] meta [
+          Documentation.FieldCaption = Extension.LoadString("OptionsFieldCaption")
+      ])
+) as table meta[
+    Documentation.Name = Extension.LoadString("GetData_Title"),
+    Documentation.DisplayName = Extension.LoadString("GetData_Title"),
+    Documentation.Caption = Extension.LoadString("GetData_Title")
+];
+
+AnalyticDBDatabaseImpl = (server as text, optional db as text, optional options as record) =>
     let
+        Address = ParseAddress(server),
+        ServerHost = Address[Host],
+        ServerPort = Address[Port],
+        ServerDatabase = Address[Database],
+        database = if db <> null and db <> "" then db else ServerDatabase,
+
         // Many data sources accept an optional 'options' record that allows users to change
         // default behaviors about the connection, such as connection timeout. Use this map
         // to define the appropriate options for your ODBC Driver. If you do not want to support
         // an options record, remove the ValidOptionsMap variable and options parameter from
         // the data source function.
+        //TODO ValidOptionsMap
         ValidOptionsMap = #table(
             {"Name", "Type", "Description", "Default", "Validate"},
             {
@@ -148,19 +185,22 @@ shared AnalyticDB.MySQL.Contents = (server as text, optional options as record) 
         //
         // Connection string settings
         //
-        ConnectionString = [
+        ConnectionString =  Record.Combine({[
             // At minimum you need to specify the ODBC Driver to use.
             Driver = Config_DriverName,
+            Server = ServerHost, 
+            Port = ServerPort
             // Specify custom properties for your ODBC Driver here.
             // The fields below are appropriate for the SQL Server ODBC Driver. The
             // names might be different for your data source.
-            Server = server
             //TODO change supported options
             // These fields come from the options record, so they might be null.
             // A later step will strip all null values from the connection string.
             //#"Application Name" = ValidatedOptions[ApplicationName]?,
             //#"Connect Timeout" = ValidatedOptions[ConnectionTimeout]?
-        ],
+            ], 
+            if database <> null then [Database = database] else []
+        }),
         //
         // Handle credentials
         // Credentials are not persisted with the query and are set through a separate
@@ -348,6 +388,25 @@ AnalyticDB.MySQL.Icons = [
         Extension.Contents("AnalyticDB.MySQL64.png") 
     }
 ];
+
+// parse address
+ParseAddress = (AnalyticDBServer as text) as record =>
+    let
+        list = Text.Split(AnalyticDBServer, ";"),
+        server = List.First(list),
+        database = if List.Count(list) > 1 then List.Last(List.FirstN(list, 2)) else null,
+        Address = Uri.Parts("http://" & server),
+        BadServer = Address[Host] = "" or Address[Scheme] <> "http" or Address[Path] <> "/" or Address[Query] <> [] or Address[Fragment] <> ""
+            or Address[UserName] <> "" or Address[Password] <> "",
+        Port = if Address[Port] = 80 and not Text.EndsWith(server, ":80") then 
+                DefaultPort 
+            else Address[Port],
+        Host = Address[Host],
+        Result = [Host=Host, Port=Port, Database=database]
+    in
+        if BadServer then 
+            error Extension.LoadString("Error_BadServer")
+        else Result;
 
 // build settings based on configuration variables
 BuildOdbcConfig = () as record =>

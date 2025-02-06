@@ -133,4 +133,48 @@
   <data name="DataSourceLabel" xml:space="preserve">
     <value>AnalyticDB MySQL</value>
   </data>
+
+  <data name="Error_BadServer" xml:space="preserve">
+    <value>Invalid server name</value>
+  </data>
+  <data name="Error_CredentialsRequired" xml:space="preserve">
+    <value>Username and Password credentials required.</value>
+  </data>
+
+  <data name="GetData_Title" xml:space="preserve">
+    <value>AnalyticDB MySQL database</value>
+  </data>
+
+  <data name="GetData_Server_FieldCaption" xml:space="preserve">
+    <value>Server</value>
+  </data>
+  <data name="GetData_Server_FieldDescription" xml:space="preserve">
+    <value>You can also enter a port number after a colon and a database name after a semicolon Example: servername:portnumber;databasename</value>
+  </data>
+  <data name="GetData_Server_FieldSample" xml:space="preserve">
+    <value>servername:portnumber;databasename</value>
+  </data>
+
+  <data name="GetData_Database_FieldCaption" xml:space="preserve">
+    <value>Database</value>
+  </data>
+  <data name="GetData_Database_FieldDescription" xml:space="preserve">
+    <value>Empty database name allows browsing databases in Navigator.</value>
+  </data>
+  <data name="GetData_Database_FieldSample" xml:space="preserve">
+    <value>databasename</value>
+  </data>
+
+  <data name="OptionsFieldCaption" xml:space="preserve">
+    <value>Advanced Options</value>
+  </data>
+  <data name="Options_ConnectionProperties_FieldCaption" xml:space="preserve">
+    <value>Connection Properties</value>
+  </data>
+  <data name="Options_ConnectionProperties_FieldDesc" xml:space="preserve">
+    <value>Input connection properties here if needed.</value>
+  </data>
+  <data name="Options_ConnectionProperties_FieldSample" xml:space="preserve">
+    <value>PropertyA=Value1;PropertyB=Value2;</value>
+  </data>
 </root>
