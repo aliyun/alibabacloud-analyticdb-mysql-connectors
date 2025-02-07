@@ -131,11 +131,21 @@ AnalyticDBDatabaseType = type function (
         Documentation.FieldDescription = Extension.LoadString("GetData_Database_FieldDescription"),
         Documentation.SampleValues = { Extension.LoadString("GetData_Database_FieldSample") }
     ]),
-    optional options as (type [
-        optional connectionProperties = (type text meta [
-            Documentation.FieldCaption = Extension.LoadString("Options_ConnectionProperties_FieldCaption"),
-            Documentation.FieldDescription = Extension.LoadString("Options_ConnectionProperties_FieldCaption"),
-            Documentation.SampleValues = { Extension.LoadString("Options_ConnectionProperties_FieldSample") }
+    optional options as (type nullable [
+        optional ConnectionTimeout = (type number meta [
+            Documentation.FieldCaption = Extension.LoadString("Options_ConnectionTimeout_FieldCaption"),
+            Documentation.FieldDescription = Extension.LoadString("Options_ConnectionTimeout_FieldDesc"),
+            Documentation.SampleValues = { Extension.LoadString("Options_ConnectionTimeout_FieldSample") }
+        ]),
+        optional ReadTimeout = (type number meta [
+            Documentation.FieldCaption = Extension.LoadString("Options_ReadTimeout_FieldCaption"),
+            Documentation.FieldDescription = Extension.LoadString("Options_ReadTimeout_FieldDesc"),
+            Documentation.SampleValues = { Extension.LoadString("Options_ReadTimeout_FieldSample") }
+        ]),
+        optional WriteTimeout = (type number meta [
+            Documentation.FieldCaption = Extension.LoadString("Options_WriteTimeout_FieldCaption"),
+            Documentation.FieldDescription = Extension.LoadString("Options_WriteTimeout_FieldDesc"),
+            Documentation.SampleValues = { Extension.LoadString("Options_WriteTimeout_FieldSample") }
         ])
       ] meta [
           Documentation.FieldCaption = Extension.LoadString("OptionsFieldCaption")
@@ -159,26 +169,30 @@ AnalyticDBDatabaseImpl = (server as text, optional db as text, optional options 
         // to define the appropriate options for your ODBC Driver. If you do not want to support
         // an options record, remove the ValidOptionsMap variable and options parameter from
         // the data source function.
-        //TODO ValidOptionsMap
         ValidOptionsMap = #table(
             {"Name", "Type", "Description", "Default", "Validate"},
             {
-                {
-                    "ApplicationName",
-                    type nullable text,
-                    "Enter a value to use as the Application Name in the SQL traces",
-                    null,
-                    each _ = null or _ <> null
-                },
                 {
                     "ConnectionTimeout",
                     type nullable number,
                     "non-negative integers",
                     null,
                     each _ = null or (_ >= 0 and Number.RoundDown(_) = _)
+                },
+                {
+                    "ReadTimeout",
+                    type nullable number,
+                    "non-negative integers",
+                    null,
+                    each _ = null or (_ >= 0 and Number.RoundDown(_) = _)
+                },
+                {
+                    "WriteTimeout",
+                    type nullable number,
+                    "non-negative integers",
+                    null,
+                    each _ = null or (_ >= 0 and Number.RoundDown(_) = _)
                 }
-                // Some data sources may support setting separate timeout values for Connect and Command timeouts
-                // {"CommandTimeout", type nullable number, "non-negative integers", null, each _ = null or (_ >= 0 and Number.RoundDown(_) = _)}
             }
         ),
         ValidatedOptions = ValidateOptions(options, ValidOptionsMap),
@@ -188,16 +202,16 @@ AnalyticDBDatabaseImpl = (server as text, optional db as text, optional options 
         ConnectionString =  Record.Combine({[
             // At minimum you need to specify the ODBC Driver to use.
             Driver = Config_DriverName,
-            Server = ServerHost, 
-            Port = ServerPort
             // Specify custom properties for your ODBC Driver here.
             // The fields below are appropriate for the SQL Server ODBC Driver. The
             // names might be different for your data source.
-            //TODO change supported options
+            Server = ServerHost,
+            Port = ServerPort,
             // These fields come from the options record, so they might be null.
             // A later step will strip all null values from the connection string.
-            //#"Application Name" = ValidatedOptions[ApplicationName]?,
-            //#"Connect Timeout" = ValidatedOptions[ConnectionTimeout]?
+            ConnectionTimeout = ValidatedOptions[ConnectionTimeout]?,
+            ReadTimeout = ValidatedOptions[ReadTimeout]?,
+            WriteTimeout = ValidatedOptions[WriteTimeout]?
             ], 
             if database <> null then [Database = database] else []
         }),

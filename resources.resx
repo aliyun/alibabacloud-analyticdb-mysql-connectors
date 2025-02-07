@@ -165,16 +165,38 @@
     <value>databasename</value>
   </data>
 
+  <!-- Advanced Options -->
   <data name="OptionsFieldCaption" xml:space="preserve">
     <value>Advanced Options</value>
   </data>
-  <data name="Options_ConnectionProperties_FieldCaption" xml:space="preserve">
-    <value>Connection Properties</value>
+
+  <data name="Options_ConnectionTimeout_FieldCaption" xml:space="preserve">
+    <value>Connection timeout in seconds</value>
   </data>
-  <data name="Options_ConnectionProperties_FieldDesc" xml:space="preserve">
-    <value>Input connection properties here if needed.</value>
+  <data name="Options_ConnectionTimeout_FieldDesc" xml:space="preserve">
+    <value>Input connection timeout in seconds.</value>
   </data>
-  <data name="Options_ConnectionProperties_FieldSample" xml:space="preserve">
-    <value>PropertyA=Value1;PropertyB=Value2;</value>
+  <data name="Options_ConnectionTimeout_FieldSample" xml:space="preserve">
+    <value>0</value>
+  </data>
+
+  <data name="Options_ReadTimeout_FieldCaption" xml:space="preserve">
+    <value>Read timeout in seconds</value>
+  </data>
+  <data name="Options_ReadTimeout_FieldDesc" xml:space="preserve">
+    <value>Input read timeout in seconds.</value>
+  </data>
+  <data name="Options_ReadTimeout_FieldSample" xml:space="preserve">
+    <value>0</value>
+  </data>
+
+  <data name="Options_WriteTimeout_FieldCaption" xml:space="preserve">
+    <value>Write timeout in seconds</value>
+  </data>
+  <data name="Options_WriteTimeout_FieldDesc" xml:space="preserve">
+    <value>Input write timeout in seconds.</value>
+  </data>
+  <data name="Options_WriteTimeout_FieldSample" xml:space="preserve">
+    <value>0</value>
   </data>
 </root>

@@ -5,4 +5,3 @@ let
     t1 = db{[Name = "t1"]}[Data]
 in
     t1
-
