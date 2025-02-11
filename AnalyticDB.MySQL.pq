@@ -9,7 +9,7 @@ section AnalyticDB.MySQL;
 // This should be set to false before release. Tracing is done through a call to
 // Diagnostics.LogValue(). When EnableTraceOutput is set to false, the call becomes a
 // no-op and simply returns the original value.
-EnableTraceOutput = true;
+EnableTraceOutput = false;
 
 /****************************
  * ODBC Driver Configuration
