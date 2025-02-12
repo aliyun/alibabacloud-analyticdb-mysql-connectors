@@ -368,7 +368,7 @@ AnalyticDB.MySQL = [
             json = Json.Document(dataSourcePath), server = json[server]
             // name of function parameter
         in
-            {"AnalyticDB.MySQL", server},
+            {"AnalyticDB.MySQL.Contents", server},
     // Set supported types of authentication
     Authentication = [
         // Windows = [],
