@@ -1,3 +1,3 @@
 # alibabacloud-analyticdb-mysql-connectors
 
-alibabacloud analyticdb mysql connectors
+Connectors for Alibaba Cloud AnalyticDB MySQL
