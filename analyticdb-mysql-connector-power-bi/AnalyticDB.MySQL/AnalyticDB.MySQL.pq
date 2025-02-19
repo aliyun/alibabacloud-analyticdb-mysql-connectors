@@ -108,7 +108,7 @@ Config_StringLiteralEscapeCharacters  = { "'" }; // ex. { "'" } or { {"\", "\\"}
 //
 // Set to null to leave default behavior.
 //
-Config_UseCastInsteadOfConvert = null;
+Config_UseCastInsteadOfConvert = true;
 // true, false, null
 // Set this to true to enable Direct Query in addition to Import mode.
 //
