@@ -2,7 +2,7 @@
 // based on MySQL ODBC driver. It is specially optimized and customized
 // for AnalyticDB MySQL.
 //
-[Version = "1.0.0"]
+[Version = "1.0.1"]
 section AnalyticDB.MySQL;
 
 // When set to true, additional trace information will be written out to the User log.
@@ -142,10 +142,15 @@ AnalyticDBDatabaseType = type function (
             Documentation.FieldDescription = Extension.LoadString("Options_ReadTimeout_FieldDesc"),
             Documentation.SampleValues = { Extension.LoadString("Options_ReadTimeout_FieldSample") }
         ]),
-        optional WriteTimeout = (type number meta [
-            Documentation.FieldCaption = Extension.LoadString("Options_WriteTimeout_FieldCaption"),
-            Documentation.FieldDescription = Extension.LoadString("Options_WriteTimeout_FieldDesc"),
-            Documentation.SampleValues = { Extension.LoadString("Options_WriteTimeout_FieldSample") }
+        optional NoCache = (type number meta [
+            Documentation.FieldCaption = Extension.LoadString("Options_NoCache_FieldCaption"),
+            Documentation.FieldDescription = Extension.LoadString("Options_NoCache_FieldDesc"),
+            Documentation.SampleValues = { Extension.LoadString("Options_NoCache_FieldSample") }
+        ]),
+        optional ForwardCursor = (type number meta [
+            Documentation.FieldCaption = Extension.LoadString("Options_ForwardCursor_FieldCaption"),
+            Documentation.FieldDescription = Extension.LoadString("Options_ForwardCursor_FieldDesc"),
+            Documentation.SampleValues = { Extension.LoadString("Options_ForwardCursor_FieldSample") }
         ])
       ] meta [
           Documentation.FieldCaption = Extension.LoadString("OptionsFieldCaption")
@@ -192,6 +197,20 @@ AnalyticDBDatabaseImpl = (server as text, optional db as text, optional options 
                     "non-negative integers",
                     null,
                     each _ = null or (_ >= 0 and Number.RoundDown(_) = _)
+                },
+                {
+                    "NoCache",
+                    type nullable number,
+                    "1 or 0 integers",
+                    null,
+                    each _ = null or (_ >= 0 and _ <= 1 and Number.RoundDown(_) = _)
+                },
+                {
+                    "ForwardCursor",
+                    type nullable number,
+                    "1 or 0 integers",
+                    null,
+                    each _ = null or (_ >= 0 and _ <= 1 and Number.RoundDown(_) = _)
                 }
             }
         ),
@@ -211,7 +230,9 @@ AnalyticDBDatabaseImpl = (server as text, optional db as text, optional options 
             // A later step will strip all null values from the connection string.
             ConnectionTimeout = ValidatedOptions[ConnectionTimeout]?,
             ReadTimeout = ValidatedOptions[ReadTimeout]?,
-            WriteTimeout = ValidatedOptions[WriteTimeout]?
+            WriteTimeout = ValidatedOptions[WriteTimeout]?,
+            NO_CACHE = ValidatedOptions[NoCache]?,
+            FORWARD_CURSOR = ValidatedOptions[ForwardCursor]?
             ], 
             if database <> null then [Database = database] else []
         }),

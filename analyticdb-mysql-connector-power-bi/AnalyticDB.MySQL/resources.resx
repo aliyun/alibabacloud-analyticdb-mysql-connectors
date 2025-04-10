@@ -199,4 +199,24 @@
   <data name="Options_WriteTimeout_FieldSample" xml:space="preserve">
     <value>0</value>
   </data>
+
+  <data name="Options_NoCache_FieldCaption" xml:space="preserve">
+    <value>Don't cache results of forward-only cursors</value>
+  </data>
+  <data name="Options_NoCache_FieldDesc" xml:space="preserve">
+    <value>Input 1 or 0 to enable or disable it.</value>
+  </data>
+  <data name="Options_NoCache_FieldSample" xml:space="preserve">
+    <value>0</value>
+  </data>
+
+  <data name="Options_ForwardCursor_FieldCaption" xml:space="preserve">
+    <value>Force use of forward-only cursors</value>
+  </data>
+  <data name="Options_ForwardCursor_FieldDesc" xml:space="preserve">
+    <value>Input 1 or 0 to enable or disable it.</value>
+  </data>
+  <data name="Options_ForwardCursor_FieldSample" xml:space="preserve">
+    <value>0</value>
+  </data>
 </root>
