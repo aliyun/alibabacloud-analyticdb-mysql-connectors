@@ -118,7 +118,7 @@ DefaultPort = 3306;
 
 
 [DataSource.Kind="AnalyticDB.MySQL", Publish="AnalyticDB.MySQL.Publish"]
-shared AnalyticDB.MySQL.Contents = Value.ReplaceType(AnalyticDBDatabaseImpl, AnalyticDBDatabaseType);
+shared AnalyticDB.MySQL.Database = Value.ReplaceType(AnalyticDBDatabaseImpl, AnalyticDBDatabaseType);
 
 AnalyticDBDatabaseType = type function (
     server as (type text meta [
@@ -389,7 +389,7 @@ AnalyticDB.MySQL = [
             json = Json.Document(dataSourcePath), server = json[server]
             // name of function parameter
         in
-            {"AnalyticDB.MySQL.Contents", server},
+            {"AnalyticDB.MySQL.Database", server},
     // Set supported types of authentication
     Authentication = [
         // Windows = [],
