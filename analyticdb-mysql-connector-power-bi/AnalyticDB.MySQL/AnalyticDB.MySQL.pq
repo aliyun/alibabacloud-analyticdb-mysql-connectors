@@ -262,7 +262,8 @@ AnalyticDBDatabaseImpl = (server as text, optional db as text, optional options 
                 // Place custom overrides here
                 // The values below are required for the SQL Native Client ODBC driver, but might
                 // not be required for your data source.
-                FractionalSecondsScale = 3
+                FractionalSecondsScale = 3,
+                Sql92Translation = "PassThrough"
             ]
         ),
         // Please refer to the ODBC specification for SQLGetInfo properties and values.
@@ -406,7 +407,30 @@ AnalyticDB.MySQL.Publish = [
     LearnMoreUrl = Extension.LoadString("LearnMoreURL"),
     SupportsDirectQuery = Config_EnableDirectQuery,
     SourceImage = AnalyticDB.MySQL.Icons,
-    SourceTypeImage = AnalyticDB.MySQL.Icons
+    SourceTypeImage = AnalyticDB.MySQL.Icons,
+    NativeQueryProperties = [
+        navigationSteps = {
+            [
+                Indices = {
+                    [
+                        FieldDisplayName = "database",
+                        IndexName = "Name"
+                    ],
+                    [
+                        ConstantValue = "Database",
+                        IndexName = "Kind"
+                    ]
+                },
+                FieldAccess = "Data"
+            ]
+        },
+        nativeQueryOptions = [
+            EnableFolding = true
+        ],
+        DefaultOptions = [
+            EnableFolding = true
+        ]
+    ]
 ];
 
 AnalyticDB.MySQL.Icons = [
