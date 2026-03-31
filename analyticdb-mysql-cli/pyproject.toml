@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "analyticdb-mysql-cli"
+version = "0.1.0"
+description = "AI-Agent-friendly database CLI for AnalyticDB MySQL"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+    {name = "Haicen"}
+]
+keywords = ["analyticdb", "mysql", "database", "cli", "ai-agent", "aliyun"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+]
+
+dependencies = [
+    "click>=8.0",
+    "pymysql>=1.0",
+    "openai>=1.0",
+    "requests>=2.28",
+    "tabulate>=0.9",
+]
+
+[project.scripts]
+adbmysql-cli = "analyticdb_mysql_cli.main:cli"
+analyticdb-mysql-cli = "analyticdb_mysql_cli.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/aliyun/analyticdb-mysql-cli"
+Repository = "https://github.com/aliyun/analyticdb-mysql-cli"
+Issues = "https://github.com/aliyun/analyticdb-mysql-cli/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

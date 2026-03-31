@@ -1,0 +1,33 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Distribution / packaging
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# C extensions
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.tox/
+htmlcov/
+.coverage
+
+# Wheels
+*.whl
+
+# IDE
+.cursor/
+.qoder/
+.env
