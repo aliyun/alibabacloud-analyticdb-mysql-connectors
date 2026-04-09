@@ -7,7 +7,7 @@ AnalyticDB MySQL is Alibaba Cloud's cloud-native data warehouse product.
 
 ## Why analyticdb-mysql-cli
 
-- **Agent-friendly**: Any agent that can run shell commands can use analyticdb-mysql-cli via the `adbmysql-cli` command (the `analyticdb-mysql-cli` command is the same entry point, useful for `which analyticdb-mysql-cli`–style checks); output is JSON by default, and the `adbmysql-cli ai-guide` command provides a self-description of analyticdb-mysql-cli usage for agents.
+- **Agent-friendly**: Any agent that can run shell commands can use analyticdb-mysql-cli via the `adbmysql-cli` command (the `analyticdb-mysql-cli` command is the same entry point, useful for `which analyticdb-mysql-cli`–style checks); output is JSON by default, and the `analyticdb-mysql-cli ai-guide` command provides a self-description of analyticdb-mysql-cli usage for agents.
 - **Safety**: Row limits, write guards, and masking reduce risk when agents or scripts operate on live data.
 - **Unified interface**: Execute SQL via CLI, without interactive prompts or session state.
 
@@ -39,7 +39,7 @@ cd analyticdb-mysql-cli
 uv tool install .
 ```
 
-After installation, the `adbmysql-cli` command is available. The same program is also installed as `analyticdb-mysql-cli` (e.g. for tooling that probes the binary name matching the PyPI package).
+After installation, the `analyticdb-mysql-cli` command is available. The same program is also installed as `analyticdb-mysql-cli` (e.g. for tooling that probes the binary name matching the PyPI package).
 
 ## Connection
 
@@ -57,20 +57,20 @@ Also supports `--dsn` CLI flag, `ADBMYSQL_DSN` environment variable, and project
 
 | Command | Description |
 |--------|-------------|
-| `adbmysql-cli status` | Connection status and version |
-| `adbmysql-cli schema tables` | List all tables |
-| `adbmysql-cli schema describe <table>` | Table structure (columns, types, indexes) |
-| `adbmysql-cli schema dump` | Output DDL for all tables (to stdout) |
-| `adbmysql-cli table profile <table>` | Table data profile (row count, nulls, distinct, min/max, candidate JOIN keys and time columns) |
-| `adbmysql-cli sql "<stmt>"` | Execute SQL (read-only by default; use `--write` for writes; `--with-schema` adds table schema; `--no-truncate` keeps large fields intact) |
-| `adbmysql-cli relations infer [--table <t>]` | Infer JOIN relationships between tables |
-| `adbmysql-cli ai-guide` | Print structured guide for AI agents (JSON) |
+| `analyticdb-mysql-cli status` | Connection status and version |
+| `analyticdb-mysql-cli schema tables` | List all tables |
+| `analyticdb-mysql-cli schema describe <table>` | Table structure (columns, types, indexes) |
+| `analyticdb-mysql-cli schema dump` | Output DDL for all tables (to stdout) |
+| `analyticdb-mysql-cli table profile <table>` | Table data profile (row count, nulls, distinct, min/max, candidate JOIN keys and time columns) |
+| `analyticdb-mysql-cli sql "<stmt>"` | Execute SQL (read-only by default; use `--write` for writes; `--with-schema` adds table schema; `--no-truncate` keeps large fields intact) |
+| `analyticdb-mysql-cli relations infer [--table <t>]` | Infer JOIN relationships between tables |
+| `analyticdb-mysql-cli ai-guide` | Print structured guide for AI agents (JSON) |
 
 ## Option order
 
 `--dsn` and `--format` are global options and must appear **before** the subcommand:
 
 ```bash
-adbmysql-cli --format table sql "SELECT * FROM t LIMIT 5"
-adbmysql-cli --dsn "mysql://root:@127.0.0.1:3306/test" schema tables
+analyticdb-mysql-cli --format table sql "SELECT * FROM t LIMIT 5"
+analyticdb-mysql-cli --dsn "mysql://root:@127.0.0.1:3306/test" schema tables
 ```
