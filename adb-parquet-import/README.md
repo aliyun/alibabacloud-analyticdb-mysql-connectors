@@ -2,7 +2,7 @@
 
 Parquet 文件批量导入 AnalyticDB MySQL (ADB) 的命令行工具。
 
-支持一条 SQL 语句包含多个 VALUES 的攒批写入，可配置 INSERT/REPLACE 模式和攒批数量，覆盖 Parquet 到 ADB 的全部数据类型映射。
+支持一条 SQL 语句包含多个 VALUES 的攒批写入，可配置 INSERT/REPLACE 模式和攒批数量，支持多线程并发写入，覆盖 Parquet 到 ADB 的全部数据类型映射。
 
 ## 前置条件
 
@@ -33,6 +33,19 @@ uv run adb_parquet_import.py \
   -f data.parquet \
   -t target_table \
   --mode replace \
+  --batch-size 5000
+
+# 2 线程并发写入
+uv run adb_parquet_import.py \
+  -f data.parquet \
+  -t target_table \
+  --threads 2
+
+# 8 线程 + 大批次，最大化吞吐
+uv run adb_parquet_import.py \
+  -f data.parquet \
+  -t target_table \
+  --threads 8 \
   --batch-size 5000
 
 # 自动建表（根据 Parquet schema 生成 DDL）
@@ -84,6 +97,7 @@ charset = utf8mb4
 [import]
 mode = insert
 batch_size = 1000
+threads = 2
 ```
 
 ```bash
@@ -106,6 +120,7 @@ uv run adb_parquet_import.py -f data.parquet -t my_table --config /path/to/my_ad
 | `ADB_CHARSET` | `--charset` |
 | `ADB_MODE` | `--mode` |
 | `ADB_BATCH_SIZE` | `--batch-size` |
+| `ADB_THREADS` | `--threads` |
 
 ```bash
 export ADB_HOST=10.0.0.1
@@ -164,6 +179,7 @@ ADB_PASSWORD=secret uv run adb_parquet_import.py \
 | `--create-table` | | `False` | 根据 Parquet schema 自动生成 DDL 并建表 |
 | `--drop-table` | | `False` | 建表前先 DROP TABLE（隐含 `--create-table`） |
 | `--columns` | | 全部列 | 指定要导入的 Parquet 列名，逗号分隔 |
+| `--threads` | `-j` | `1` | 并发写入线程数，每个线程使用独立的数据库连接 |
 
 ### 运维选项
 
@@ -229,6 +245,30 @@ INSERT INTO `table` (`c1`, `c2`, `c3`) VALUES
 
 `--batch-size` 控制每条 SQL 中包含的行数。Parquet 文件通过 `iter_batches` 流式读取，内存占用与批次大小成正比，不受文件总大小影响。
 
+## 多线程并发写入
+
+通过 `-j`/`--threads` 参数可开启多线程并发写入，提升导入吞吐量：
+
+```bash
+uv run adb_parquet_import.py -f data.parquet -t target_table -j 2
+```
+
+**工作原理：**
+
+- **主线程**负责顺序读取 Parquet 文件并构建 SQL 语句（CPU 密集）
+- **工作线程池**中的多个线程并发执行 SQL 写入到 ADB（IO 密集）
+- 每个工作线程持有**独立的数据库连接**（pymysql 连接非线程安全）
+- 进度条和结果统计均为线程安全
+
+**线程数选择建议：**
+
+| 场景 | 建议线程数 |
+|------|------------|
+| 窄表、小批次 | 4-8 |
+| 宽表、大批次 | 2-4 |
+| 网络延迟较高 | 适当增大 |
+| ADB 集群负载已高 | 保持 1-2 |
+
 ## 错误处理
 
 | 场景 | 行为 |
@@ -266,6 +306,7 @@ Import Summary
   Throughput:      22,030 rows/sec
   Mode:            INSERT
   Batch size:      1,000
+  Threads:         2
 ==================================================
 ```
 
@@ -274,3 +315,4 @@ Import Summary
 - **REPLACE 模式**：目标表必须有主键或唯一索引才能发挥 REPLACE 的去重语义，否则等同于 INSERT。
 - **自动建表的分布键**：`--create-table` 生成的 DDL 默认使用第一列作为 `DISTRIBUTE BY HASH` 的分布键。如需指定其他分布策略，请手动建表。
 - **ADB `max_allowed_packet`**：大批次 + 宽表可能导致单条 SQL 超过 ADB 的 `max_allowed_packet` 限制（默认 64MB），可通过减小 `--batch-size` 解决。
+- **多线程连接数**：`--threads N` 会创建 N 个数据库连接，请确保 ADB 实例的连接数上限足够。

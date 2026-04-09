@@ -30,7 +30,9 @@ import logging
 import math
 import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, Future
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -255,6 +257,16 @@ class ImportResult:
     failed_batches: int = 0
     elapsed: float = 0.0
     interrupted: bool = False
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def add_imported(self, count: int) -> None:
+        with self._lock:
+            self.imported_rows += count
+
+    def add_failed(self, count: int) -> None:
+        with self._lock:
+            self.failed_rows += count
+            self.failed_batches += 1
 
 
 def _split_by_size(
@@ -288,6 +300,72 @@ def _split_by_size(
     if current:
         batches.append(current)
     return batches
+
+
+def _execute_sub_batch(
+    args: argparse.Namespace,
+    sql_prefix: str,
+    sub_rows: list[str],
+    result: ImportResult,
+    pbar: tqdm | None,
+    pbar_lock: threading.Lock,
+    pbar_rows: int,
+    conns: dict[int, pymysql.Connection],
+    conns_lock: threading.Lock,
+    abort_event: threading.Event,
+) -> None:
+    """Execute a single sub-batch INSERT in a worker thread."""
+    if abort_event.is_set():
+        return
+
+    tid = threading.get_ident()
+
+    # Get or create a per-thread connection
+    with conns_lock:
+        conn = conns.get(tid)
+
+    if conn is None or not conn.open:
+        try:
+            conn = _connect(args)
+            with conns_lock:
+                conns[tid] = conn
+        except Exception:
+            logger.error("Worker thread failed to connect, aborting.")
+            abort_event.set()
+            result.add_failed(len(sub_rows))
+            return
+
+    full_sql = sql_prefix + "\n" + ",\n".join(sub_rows)
+    sub_count = len(sub_rows)
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(full_sql)
+        conn.commit()
+        result.add_imported(sub_count)
+    except pymysql.Error as exc:
+        logger.error("Batch failed (%d rows): %s", sub_count, exc)
+        logger.debug("Failed SQL (first 500 chars): %s", full_sql[:500])
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        result.add_failed(sub_count)
+        # Try to recover from lost connection
+        if not conn.open:
+            logger.warning("Connection lost in worker, attempting reconnect ...")
+            try:
+                conn = _connect(args)
+                with conns_lock:
+                    conns[tid] = conn
+            except Exception:
+                logger.error("Reconnect failed in worker, aborting.")
+                abort_event.set()
+    finally:
+        cursor.close()
+        if pbar is not None and pbar_rows > 0:
+            with pbar_lock:
+                pbar.update(pbar_rows)
 
 
 def import_parquet(args: argparse.Namespace) -> ImportResult:
@@ -336,7 +414,7 @@ def import_parquet(args: argparse.Namespace) -> ImportResult:
         result.elapsed = time.monotonic() - start
         return result
 
-    # -- Connect to ADB MySQL -----------------------------------------------
+    # -- Connect to ADB MySQL (main connection for DDL) --------------------
     conn = _connect(args)
     cursor = conn.cursor()
 
@@ -352,88 +430,86 @@ def import_parquet(args: argparse.Namespace) -> ImportResult:
         cursor.execute(ddl)
         conn.commit()
 
-    # -- Iterate batches ----------------------------------------------------
+    cursor.close()
+    conn.close()
+
+    # -- Iterate batches (multi-threaded) -----------------------------------
+    num_threads = getattr(args, "threads", 1) or 1
+    logger.info("Using %d writer thread(s)", num_threads)
+
     show_progress = not args.no_progress and total_rows > 0
     pbar = tqdm(total=total_rows, unit="rows", disable=not show_progress)
+    pbar_lock = threading.Lock()
 
     # max_sql_bytes: soft limit per INSERT statement to stay within
     # MySQL max_allowed_packet (default 16 MB, we use 15 MB to be safe).
     max_sql_bytes = 15 * 1024 * 1024
 
-    abort = False
+    abort_event = threading.Event()
+    # Per-thread connections: thread_id -> connection
+    conns: dict[int, pymysql.Connection] = {}
+    conns_lock = threading.Lock()
 
     try:
-        for batch in pf.iter_batches(batch_size=args.batch_size, columns=col_names):
-            if abort:
-                break
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures: list[Future] = []
 
-            n_rows = batch.num_rows
-            if n_rows == 0:
-                continue
+            for batch in pf.iter_batches(batch_size=args.batch_size, columns=col_names):
+                if abort_event.is_set():
+                    break
 
-            # Convert columns to Python lists
-            columns_data = [batch.column(c).to_pylist() for c in col_names]
+                n_rows = batch.num_rows
+                if n_rows == 0:
+                    continue
 
-            # Build per-row value tuples
-            row_tuples: list[str] = []
-            for row_idx in range(n_rows):
-                vals: list[str] = []
-                for col_idx in range(len(col_names)):
-                    raw = columns_data[col_idx][row_idx]
-                    if raw is None:
-                        vals.append("NULL")
-                    else:
-                        vals.append(type_info[col_idx][1](raw))
-                row_tuples.append("(" + ",".join(vals) + ")")
+                # Convert columns to Python lists
+                columns_data = [batch.column(c).to_pylist() for c in col_names]
 
-            # Split into sub-batches that respect max_sql_bytes
-            sub_batches = _split_by_size(sql_prefix, row_tuples, max_sql_bytes)
+                # Build per-row value tuples
+                row_tuples: list[str] = []
+                for row_idx in range(n_rows):
+                    vals: list[str] = []
+                    for col_idx in range(len(col_names)):
+                        raw = columns_data[col_idx][row_idx]
+                        if raw is None:
+                            vals.append("NULL")
+                        else:
+                            vals.append(type_info[col_idx][1](raw))
+                    row_tuples.append("(" + ",".join(vals) + ")")
 
-            for sub_rows in sub_batches:
-                full_sql = sql_prefix + "\n" + ",\n".join(sub_rows)
-                sub_count = len(sub_rows)
+                # Split into sub-batches that respect max_sql_bytes
+                sub_batches = _split_by_size(sql_prefix, row_tuples, max_sql_bytes)
 
-                try:
-                    cursor.execute(full_sql)
-                    conn.commit()
-                    result.imported_rows += sub_count
-                except pymysql.Error as exc:
-                    logger.error(
-                        "Batch failed (%d rows): %s",
-                        sub_count,
-                        exc,
+                for i, sub_rows in enumerate(sub_batches):
+                    # Only the last sub-batch of this parquet batch updates pbar
+                    is_last = (i == len(sub_batches) - 1)
+                    pbar_rows = n_rows if is_last else 0
+
+                    fut = executor.submit(
+                        _execute_sub_batch,
+                        args, sql_prefix, sub_rows, result,
+                        pbar, pbar_lock, pbar_rows,
+                        conns, conns_lock, abort_event,
                     )
-                    logger.debug("Failed SQL (first 500 chars): %s", full_sql[:500])
-                    try:
-                        conn.rollback()
-                    except Exception:
-                        pass
-                    result.failed_rows += sub_count
-                    result.failed_batches += 1
-                    # Try to recover from lost connection
-                    if not conn.open:
-                        logger.warning("Connection lost, attempting reconnect ...")
-                        try:
-                            conn = _connect(args)
-                            cursor = conn.cursor()
-                        except Exception:
-                            logger.error("Reconnect failed, aborting.")
-                            abort = True
-                            break
+                    futures.append(fut)
 
-            pbar.update(n_rows)
+            # Wait for all pending futures
+            for fut in futures:
+                fut.result()
 
     except KeyboardInterrupt:
         logger.warning("Interrupted by user.")
         result.interrupted = True
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        abort_event.set()
     finally:
         pbar.close()
-        cursor.close()
-        conn.close()
+        # Close all worker connections
+        with conns_lock:
+            for c in conns.values():
+                try:
+                    c.close()
+                except Exception:
+                    pass
 
     result.elapsed = time.monotonic() - start
     return result
@@ -534,6 +610,7 @@ _CONFIG_KEYS: dict[str, tuple[str, str, type]] = {
     "charset":    ("connection", "ADB_CHARSET",  str),
     "mode":       ("import",     "ADB_MODE",     str),
     "batch_size": ("import",     "ADB_BATCH_SIZE", int),
+    "threads":    ("import",     "ADB_THREADS",    int),
 }
 
 DEFAULT_CONFIG_FILE = ".adb.ini"
@@ -647,6 +724,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                           help="Drop table before creating (implies --create-table)")
     behavior.add_argument("--columns", default=None,
                           help="Comma-separated list of columns to import (default: all)")
+    behavior.add_argument("-j", "--threads", type=int, default=None,
+                          help="Number of parallel writer threads (default: 1)")
 
     oper = p.add_argument_group("Operational")
     oper.add_argument("--dry-run", action="store_true",
@@ -668,9 +747,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "charset": "utf8mb4",
         "mode": "insert",
         "batch_size": 1000,
+        "threads": 1,
     }
 
-    for key in ("host", "port", "user", "password", "database", "charset", "mode", "batch_size"):
+    for key in ("host", "port", "user", "password", "database", "charset", "mode", "batch_size", "threads"):
         cli_val = getattr(args, key.replace("-", "_"), None)
         if cli_val is not None:
             continue  # CLI takes priority
@@ -716,7 +796,7 @@ def main() -> None:
 
     logger.info("Parquet file: %s", args.file)
     logger.info("Target: %s:%d/%s.%s", args.host, args.port, args.database, args.table)
-    logger.info("Mode: %s | Batch size: %d", args.mode.upper(), args.batch_size)
+    logger.info("Mode: %s | Batch size: %d | Threads: %d", args.mode.upper(), args.batch_size, args.threads)
 
     result = import_parquet(args)
 
@@ -735,6 +815,7 @@ def main() -> None:
     print(f"  Throughput:      {throughput:,.0f} rows/sec")
     print(f"  Mode:            {args.mode.upper()}")
     print(f"  Batch size:      {args.batch_size:,}")
+    print(f"  Threads:         {args.threads}")
     print("=" * 50)
 
     if result.failed_rows > 0 and result.imported_rows == 0:
