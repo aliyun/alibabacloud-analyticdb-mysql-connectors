@@ -423,6 +423,95 @@ def _worker_build_and_execute(
                 pbar.update(n_rows)
 
 
+def _salvage_row_group(
+    pf: pq.ParquetFile,
+    rg_idx: int,
+    col_names: list[str],
+    batch_size: int,
+    sql_prefix: str,
+    type_info: list[tuple[str, Callable]],
+    n_cols: int,
+    max_sql_bytes: int,
+    args: argparse.Namespace,
+    result: ImportResult,
+    executor,
+    futures: list,
+    pbar: tqdm | None,
+    pbar_lock: threading.Lock,
+    conns: dict[int, pymysql.Connection],
+    conns_lock: threading.Lock,
+    abort_event: threading.Event,
+) -> int:
+    """Try to salvage readable rows from a corrupted row group via streaming.
+
+    Returns the number of rows successfully dispatched for import.
+    """
+    logger.info(
+        "Attempting to salvage data from row group %d via streaming read ...",
+        rg_idx + 1,
+    )
+    salvaged = 0
+    rows_before_rg = sum(
+        pf.metadata.row_group(i).num_rows for i in range(rg_idx)
+    )
+    rg_num_rows = pf.metadata.row_group(rg_idx).num_rows
+    rows_seen = 0
+
+    try:
+        for batch in pf.iter_batches(
+            batch_size=batch_size, columns=col_names, use_threads=False,
+        ):
+            batch_rows = batch.num_rows
+            # Skip batches belonging to earlier row groups
+            if rows_seen + batch_rows <= rows_before_rg:
+                rows_seen += batch_rows
+                continue
+            # Past our target row group
+            if rows_seen >= rows_before_rg + rg_num_rows:
+                break
+            rows_seen += batch_rows
+
+            if abort_event.is_set():
+                break
+
+            n_rows = batch.num_rows
+            if n_rows == 0:
+                continue
+
+            columns_data = [batch.column(c).to_pylist() for c in col_names]
+
+            fut = executor.submit(
+                _worker_build_and_execute,
+                args, sql_prefix, columns_data, type_info,
+                n_rows, n_cols, max_sql_bytes, result,
+                pbar, pbar_lock,
+                conns, conns_lock, abort_event,
+            )
+            futures.append(fut)
+            salvaged += n_rows
+
+            if len(futures) >= 3:
+                for done_fut in futures[:1]:
+                    done_fut.result()
+                futures[:1] = []
+
+    except Exception as exc:
+        logger.warning(
+            "Streaming salvage stopped at %d rows in row group %d: %r",
+            salvaged, rg_idx + 1, exc,
+        )
+
+    if salvaged > 0:
+        logger.info(
+            "Salvaged %d / %d rows from corrupted row group %d",
+            salvaged, rg_num_rows, rg_idx + 1,
+        )
+    else:
+        logger.warning("Could not salvage any rows from row group %d", rg_idx + 1)
+
+    return salvaged
+
+
 def import_parquet(args: argparse.Namespace) -> ImportResult:
     """Main import orchestration."""
     result = ImportResult()
@@ -510,34 +599,74 @@ def import_parquet(args: argparse.Namespace) -> ImportResult:
     try:
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures: list[Future] = []
+            rows_dispatched = 0
 
-            for batch in pf.iter_batches(batch_size=args.batch_size, columns=col_names):
+            # Iterate by row group to allow skipping corrupted groups
+            num_row_groups = pf.metadata.num_row_groups
+            for rg_idx in range(num_row_groups):
                 if abort_event.is_set():
                     break
 
-                n_rows = batch.num_rows
-                if n_rows == 0:
-                    continue
+                rg_meta = pf.metadata.row_group(rg_idx)
+                rg_num_rows = rg_meta.num_rows
 
-                # Convert columns to Python lists (C code, releases GIL)
-                columns_data = [batch.column(c).to_pylist() for c in col_names]
+                try:
+                    rg_table = pf.read_row_group(rg_idx, columns=col_names, use_threads=False)
 
-                # Dispatch entire batch to worker: SQL building + execution
-                fut = executor.submit(
-                    _worker_build_and_execute,
-                    args, sql_prefix, columns_data, type_info,
-                    n_rows, n_cols, max_sql_bytes, result,
-                    pbar, pbar_lock,
-                    conns, conns_lock, abort_event,
-                )
-                futures.append(fut)
+                    for batch in rg_table.to_batches(max_chunksize=args.batch_size):
+                        if abort_event.is_set():
+                            break
 
-                # Prevent unbounded memory growth: if we've dispatched
-                # enough batches ahead, wait for the oldest ones to finish.
-                if len(futures) >= num_threads * 3:
-                    for done_fut in futures[:num_threads]:
-                        done_fut.result()
-                    futures = futures[num_threads:]
+                        n_rows = batch.num_rows
+                        if n_rows == 0:
+                            continue
+
+                        # Convert columns to Python lists (C code, releases GIL)
+                        columns_data = [batch.column(c).to_pylist() for c in col_names]
+
+                        # Dispatch entire batch to worker: SQL building + execution
+                        fut = executor.submit(
+                            _worker_build_and_execute,
+                            args, sql_prefix, columns_data, type_info,
+                            n_rows, n_cols, max_sql_bytes, result,
+                            pbar, pbar_lock,
+                            conns, conns_lock, abort_event,
+                        )
+                        futures.append(fut)
+                        rows_dispatched += n_rows
+
+                        # Prevent unbounded memory growth: if we've dispatched
+                        # enough batches ahead, wait for the oldest ones to finish.
+                        if len(futures) >= num_threads * 3:
+                            for done_fut in futures[:num_threads]:
+                                done_fut.result()
+                            futures = futures[num_threads:]
+
+                    del rg_table  # free Arrow memory promptly
+
+                except Exception as exc:
+                    logger.error(
+                        "Corrupted row group %d/%d (%d rows, offset ~%d): %r",
+                        rg_idx + 1, num_row_groups, rg_num_rows, rows_dispatched, exc,
+                    )
+                    if getattr(args, "on_error", "abort") == "skip":
+                        # Fallback: try to salvage partial data via streaming
+                        salvaged = _salvage_row_group(
+                            pf, rg_idx, col_names, args.batch_size,
+                            sql_prefix, type_info, n_cols, max_sql_bytes,
+                            args, result, executor, futures,
+                            pbar, pbar_lock, conns, conns_lock, abort_event,
+                        )
+                        remaining = rg_num_rows - salvaged
+                        if remaining > 0:
+                            result.add_failed(remaining)
+                        if pbar is not None:
+                            with pbar_lock:
+                                pbar.update(rg_num_rows - salvaged)
+                        rows_dispatched += rg_num_rows
+                        continue
+                    else:
+                        raise
 
             # Wait for all pending futures
             for fut in futures:
@@ -763,6 +892,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                           help="Comma-separated list of columns to import (default: all)")
     behavior.add_argument("-j", "--threads", type=int, default=None,
                           help="Number of parallel writer threads (default: 1)")
+    behavior.add_argument("--on-error", choices=["abort", "skip"], default="abort",
+                          help="Action on corrupted row group: abort (default) or skip")
 
     oper = p.add_argument_group("Operational")
     oper.add_argument("--dry-run", action="store_true",

@@ -180,6 +180,7 @@ ADB_PASSWORD=secret uv run adb_parquet_import.py \
 | `--drop-table` | | `False` | 建表前先 DROP TABLE（隐含 `--create-table`） |
 | `--columns` | | 全部列 | 指定要导入的 Parquet 列名，逗号分隔 |
 | `--threads` | `-j` | `1` | 并发写入线程数，每个线程使用独立的数据库连接 |
+| `--on-error` | | `abort` | 遇到损坏的 Row Group 时的行为：`abort` 直接报错终止，`skip` 跳过并继续 |
 
 ### 运维选项
 
@@ -274,6 +275,7 @@ uv run adb_parquet_import.py -f data.parquet -t target_table -j 2
 | 场景 | 行为 |
 |------|------|
 | Parquet 文件不存在或格式错误 | 立即退出，exit code 2 |
+| Parquet Row Group 数据损坏 | 默认报错终止；`--on-error=skip` 时跳过损坏部分，继续导入其余数据 |
 | 数据库连接/认证失败 | 立即退出，exit code 2 |
 | 某批次执行失败 | rollback 该批，记录错误日志，继续下一批 |
 | 数据库连接断开 | 自动重连一次，失败则退出 |
