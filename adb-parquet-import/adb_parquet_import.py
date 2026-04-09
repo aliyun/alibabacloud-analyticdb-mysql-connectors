@@ -302,25 +302,52 @@ def _split_by_size(
     return batches
 
 
-def _execute_sub_batch(
+def _build_row_tuples(
+    columns_data: list[list],
+    type_info: list[tuple[str, Callable]],
+    n_rows: int,
+    n_cols: int,
+) -> list[str]:
+    """Build per-row SQL value tuples from columnar data."""
+    row_tuples: list[str] = []
+    for row_idx in range(n_rows):
+        vals: list[str] = []
+        for col_idx in range(n_cols):
+            raw = columns_data[col_idx][row_idx]
+            if raw is None:
+                vals.append("NULL")
+            else:
+                vals.append(type_info[col_idx][1](raw))
+        row_tuples.append("(" + ",".join(vals) + ")")
+    return row_tuples
+
+
+def _worker_build_and_execute(
     args: argparse.Namespace,
     sql_prefix: str,
-    sub_rows: list[str],
+    columns_data: list[list],
+    type_info: list[tuple[str, Callable]],
+    n_rows: int,
+    n_cols: int,
+    max_sql_bytes: int,
     result: ImportResult,
     pbar: tqdm | None,
     pbar_lock: threading.Lock,
-    pbar_rows: int,
     conns: dict[int, pymysql.Connection],
     conns_lock: threading.Lock,
     abort_event: threading.Event,
 ) -> None:
-    """Execute a single sub-batch INSERT in a worker thread."""
+    """Build SQL and execute INSERT(s) for one Parquet batch in a worker thread.
+
+    This moves both the CPU-bound SQL construction and the I/O-bound DB write
+    into the worker, so the main thread can keep reading Parquet batches ahead.
+    """
     if abort_event.is_set():
         return
 
     tid = threading.get_ident()
 
-    # Get or create a per-thread connection
+    # --- Get or create a per-thread connection ---
     with conns_lock:
         conn = conns.get(tid)
 
@@ -332,40 +359,68 @@ def _execute_sub_batch(
         except Exception:
             logger.error("Worker thread failed to connect, aborting.")
             abort_event.set()
-            result.add_failed(len(sub_rows))
+            result.add_failed(n_rows)
             return
 
-    full_sql = sql_prefix + "\n" + ",\n".join(sub_rows)
-    sub_count = len(sub_rows)
+    # --- Build row tuples (CPU work, released from main thread) ---
+    row_tuples = _build_row_tuples(columns_data, type_info, n_rows, n_cols)
+
+    # --- Split into sub-batches that respect max_sql_bytes ---
+    sub_batches = _split_by_size(sql_prefix, row_tuples, max_sql_bytes)
+
+    # --- Execute all sub-batches in a single transaction ---
     cursor = conn.cursor()
+    batch_imported = 0
+    batch_failed = 0
 
     try:
-        cursor.execute(full_sql)
-        conn.commit()
-        result.add_imported(sub_count)
-    except pymysql.Error as exc:
-        logger.error("Batch failed (%d rows): %s", sub_count, exc)
-        logger.debug("Failed SQL (first 500 chars): %s", full_sql[:500])
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        result.add_failed(sub_count)
-        # Try to recover from lost connection
-        if not conn.open:
-            logger.warning("Connection lost in worker, attempting reconnect ...")
+        for sub_rows in sub_batches:
+            if abort_event.is_set():
+                break
+            full_sql = sql_prefix + "\n" + ",\n".join(sub_rows)
+            sub_count = len(sub_rows)
             try:
-                conn = _connect(args)
-                with conns_lock:
-                    conns[tid] = conn
-            except Exception:
-                logger.error("Reconnect failed in worker, aborting.")
-                abort_event.set()
+                cursor.execute(full_sql)
+                batch_imported += sub_count
+            except pymysql.Error as exc:
+                logger.error("Batch failed (%d rows): %s", sub_count, exc)
+                logger.debug("Failed SQL (first 500 chars): %s", full_sql[:500])
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                batch_failed += sub_count
+                result.add_failed(sub_count)
+                # Try to recover from lost connection
+                if not conn.open:
+                    logger.warning("Connection lost in worker, attempting reconnect ...")
+                    try:
+                        conn = _connect(args)
+                        cursor = conn.cursor()
+                        with conns_lock:
+                            conns[tid] = conn
+                    except Exception:
+                        logger.error("Reconnect failed in worker, aborting.")
+                        abort_event.set()
+                        break
+
+        # Commit once for all successful sub-batches in this parquet batch
+        if batch_imported > 0 and conn.open:
+            try:
+                conn.commit()
+                result.add_imported(batch_imported)
+            except pymysql.Error as exc:
+                logger.error("Commit failed (%d rows): %s", batch_imported, exc)
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                result.add_failed(batch_imported)
     finally:
         cursor.close()
-        if pbar is not None and pbar_rows > 0:
+        if pbar is not None:
             with pbar_lock:
-                pbar.update(pbar_rows)
+                pbar.update(n_rows)
 
 
 def import_parquet(args: argparse.Namespace) -> ImportResult:
@@ -450,6 +505,8 @@ def import_parquet(args: argparse.Namespace) -> ImportResult:
     conns: dict[int, pymysql.Connection] = {}
     conns_lock = threading.Lock()
 
+    n_cols = len(col_names)
+
     try:
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures: list[Future] = []
@@ -462,36 +519,25 @@ def import_parquet(args: argparse.Namespace) -> ImportResult:
                 if n_rows == 0:
                     continue
 
-                # Convert columns to Python lists
+                # Convert columns to Python lists (C code, releases GIL)
                 columns_data = [batch.column(c).to_pylist() for c in col_names]
 
-                # Build per-row value tuples
-                row_tuples: list[str] = []
-                for row_idx in range(n_rows):
-                    vals: list[str] = []
-                    for col_idx in range(len(col_names)):
-                        raw = columns_data[col_idx][row_idx]
-                        if raw is None:
-                            vals.append("NULL")
-                        else:
-                            vals.append(type_info[col_idx][1](raw))
-                    row_tuples.append("(" + ",".join(vals) + ")")
+                # Dispatch entire batch to worker: SQL building + execution
+                fut = executor.submit(
+                    _worker_build_and_execute,
+                    args, sql_prefix, columns_data, type_info,
+                    n_rows, n_cols, max_sql_bytes, result,
+                    pbar, pbar_lock,
+                    conns, conns_lock, abort_event,
+                )
+                futures.append(fut)
 
-                # Split into sub-batches that respect max_sql_bytes
-                sub_batches = _split_by_size(sql_prefix, row_tuples, max_sql_bytes)
-
-                for i, sub_rows in enumerate(sub_batches):
-                    # Only the last sub-batch of this parquet batch updates pbar
-                    is_last = (i == len(sub_batches) - 1)
-                    pbar_rows = n_rows if is_last else 0
-
-                    fut = executor.submit(
-                        _execute_sub_batch,
-                        args, sql_prefix, sub_rows, result,
-                        pbar, pbar_lock, pbar_rows,
-                        conns, conns_lock, abort_event,
-                    )
-                    futures.append(fut)
+                # Prevent unbounded memory growth: if we've dispatched
+                # enough batches ahead, wait for the oldest ones to finish.
+                if len(futures) >= num_threads * 3:
+                    for done_fut in futures[:num_threads]:
+                        done_fut.result()
+                    futures = futures[num_threads:]
 
             # Wait for all pending futures
             for fut in futures:
@@ -572,16 +618,7 @@ def _dry_run(
             break
 
         columns_data = [batch.column(c).to_pylist() for c in col_names]
-        rows_sql: list[str] = []
-        for row_idx in range(batch.num_rows):
-            vals: list[str] = []
-            for col_idx in range(len(col_names)):
-                raw = columns_data[col_idx][row_idx]
-                if raw is None:
-                    vals.append("NULL")
-                else:
-                    vals.append(type_info[col_idx][1](raw))
-            rows_sql.append("(" + ",".join(vals) + ")")
+        rows_sql = _build_row_tuples(columns_data, type_info, batch.num_rows, len(col_names))
 
         full_sql = sql_prefix + "\n" + ",\n".join(rows_sql) + ";"
         print(f"--- Batch {batch_count} ({batch.num_rows} rows) ---")
